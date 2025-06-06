@@ -1,0 +1,96 @@
+#!/bin/bash
+#
+# git-identity - A wrapper script for git that allows selecting between work and personal identities
+#
+# Usage: git-identity [git commands and options]
+#
+# Example: git-identity clone git@github.com:username/repo.git
+#          git-identity push origin main
+#
+# Author: AI Assistant
+
+set -e
+
+# Function to display usage information
+function show_usage() {
+  echo "git-identity - A wrapper script for git that allows selecting between work and personal identities"
+  echo
+  echo "Usage: git-identity [git commands and options]"
+  echo
+  echo "Examples:"
+  echo "  git-identity clone git@github.com:username/repo.git"
+  echo "  git-identity push origin main"
+  echo
+  echo "This script will prompt you to select which identity to use and then pass all arguments to git."
+  echo
+}
+
+# Function to select identity
+function select_identity() {
+  echo "Select GitHub identity to use:"
+  echo "1) Work (default ~/.ssh/id_rsa)"
+  echo "2) Personal (github-personal using ~/.ssh/id_rsa_personal)"
+  read -p "Enter choice [1-2]: " choice
+
+  case $choice in
+    1)
+      echo "Using work identity (default)"
+      # Use default SSH settings (no special environment needed)
+      ;;
+    2)
+      echo "Using personal identity (github-personal)"
+      # Replace github.com with github-personal in git URLs
+      # This leverages the SSH config to use the personal identity
+      export GIT_SSH_COMMAND="ssh -F ~/.ssh/config"
+      
+      # Replace all github.com references with github-personal
+      # First, check if any git arguments contain github.com
+      for arg in "$@"; do
+        if [[ "$arg" == *"github.com"* ]]; then
+          echo "Replacing github.com with github-personal in URL"
+          # Break after message - actual replacement happens during git execution
+          break
+        fi
+      done
+      
+      # Replace all github.com with github-personal in command line arguments
+      args=()
+      for arg in "$@"; do
+        args+=("${arg//github.com/github-personal}")
+      done
+      set -- "${args[@]}"
+      ;;
+    *)
+      echo "Invalid choice. Using work identity (default)."
+      ;;
+  esac
+  
+  return 0
+}
+
+# Show help if requested
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+  show_usage
+  exit 0
+fi
+
+# Check if git is installed
+if ! command -v git &> /dev/null; then
+  echo "Error: git is not installed or not in PATH"
+  exit 1
+fi
+
+# Check if no arguments provided
+if [[ $# -eq 0 ]]; then
+  echo "Error: No git commands provided"
+  show_usage
+  exit 1
+fi
+
+# Select identity
+select_identity "$@"
+
+# Execute git with the selected identity and all provided arguments
+echo "Executing: git $@"
+git "$@"
+
