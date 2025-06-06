@@ -25,6 +25,21 @@ function show_usage() {
   echo
 }
 
+# Function to test SSH connection
+function test_ssh_connection() {
+  local host=$1
+  echo "Testing SSH connection to $host..."
+  if ssh -T -o ConnectTimeout=10 "$host" 2>&1 | grep -q "successfully authenticated"; then
+    echo "✓ SSH connection successful"
+    return 0
+  else
+    echo "✗ SSH connection failed"
+    echo "Debug: Running ssh -T $host"
+    ssh -T "$host"
+    return 1
+  fi
+}
+
 # Function to select identity
 function select_identity() {
   echo "Select GitHub identity to use:"
@@ -35,30 +50,57 @@ function select_identity() {
   case $choice in
     1)
       echo "Using work identity (default)"
-      # Use default SSH settings (no special environment needed)
+      # Test connection with default settings
+      if ! test_ssh_connection "git@github.com"; then
+        echo "Warning: SSH connection test failed for work identity"
+        read -p "Continue anyway? [y/N]: " continue_choice
+        if [[ "$continue_choice" != "y" && "$continue_choice" != "Y" ]]; then
+          exit 1
+        fi
+      fi
       ;;
     2)
       echo "Using personal identity (github-personal)"
-      # Replace github.com with github-personal in git URLs
-      # This leverages the SSH config to use the personal identity
+      
+      # Test connection with personal identity
+      if ! test_ssh_connection "git@github-personal"; then
+        echo "Warning: SSH connection test failed for personal identity"
+        echo "Make sure your ~/.ssh/config has an entry like:"
+        echo ""
+        echo "Host github-personal"
+        echo "    HostName github.com"
+        echo "    User git"
+        echo "    IdentityFile ~/.ssh/id_rsa_personal"
+        echo "    IdentitiesOnly yes"
+        echo ""
+        read -p "Continue anyway? [y/N]: " continue_choice
+        if [[ "$continue_choice" != "y" && "$continue_choice" != "Y" ]]; then
+          exit 1
+        fi
+      fi
+      
+      # Set SSH command to use config file explicitly
       export GIT_SSH_COMMAND="ssh -F ~/.ssh/config"
       
       # Replace all github.com references with github-personal
-      # First, check if any git arguments contain github.com
+      local modified=false
       for arg in "$@"; do
         if [[ "$arg" == *"github.com"* ]]; then
-          echo "Replacing github.com with github-personal in URL"
-          # Break after message - actual replacement happens during git execution
-          break
+          echo "Replacing github.com with github-personal in URL: $arg"
+          modified=true
         fi
       done
       
-      # Replace all github.com with github-personal in command line arguments
-      args=()
-      for arg in "$@"; do
-        args+=("${arg//github.com/github-personal}")
-      done
-      set -- "${args[@]}"
+      if $modified; then
+        # Replace all github.com with github-personal in command line arguments
+        local new_args=()
+        for arg in "$@"; do
+          new_args+=("${arg//github.com/github-personal}")
+        done
+        # Update the global arguments
+        set -- "${new_args[@]}"
+        echo "Modified command will be: git $*"
+      fi
       ;;
     *)
       echo "Invalid choice. Using work identity (default)."
@@ -68,9 +110,35 @@ function select_identity() {
   return 0
 }
 
+# Function to debug SSH setup
+function debug_ssh() {
+  echo "=== SSH Debug Information ==="
+  echo "SSH config file (~/.ssh/config):"
+  if [[ -f ~/.ssh/config ]]; then
+    echo "--- ~/.ssh/config exists ---"
+    grep -A 10 -B 2 "github" ~/.ssh/config || echo "No github entries found"
+  else
+    echo "~/.ssh/config does not exist"
+  fi
+  
+  echo ""
+  echo "SSH keys in ~/.ssh/:"
+  ls -la ~/.ssh/id_* 2>/dev/null || echo "No SSH keys found"
+  
+  echo ""
+  echo "SSH agent keys:"
+  ssh-add -l 2>/dev/null || echo "No keys in SSH agent or SSH agent not running"
+}
+
 # Show help if requested
 if [[ "$1" == "-h" || "$1" == "--help" ]]; then
   show_usage
+  exit 0
+fi
+
+# Show debug info if requested
+if [[ "$1" == "--debug" ]]; then
+  debug_ssh
   exit 0
 fi
 
@@ -87,10 +155,21 @@ if [[ $# -eq 0 ]]; then
   exit 1
 fi
 
-# Select identity
+# Store original arguments for debugging
+original_args=("$@")
+
+# Select identity and potentially modify arguments
 select_identity "$@"
 
 # Execute git with the selected identity and all provided arguments
-echo "Executing: git $@"
-git "$@"
-
+echo "Executing: git $*"
+if ! git "$@"; then
+  echo ""
+  echo "=== Git command failed. Debug information: ==="
+  echo "Original command: git ${original_args[*]}"
+  echo "Modified command: git $*"
+  echo "GIT_SSH_COMMAND: ${GIT_SSH_COMMAND:-not set}"
+  echo ""
+  echo "Run 'git-identity --debug' for SSH configuration details"
+  exit 1
+fi
