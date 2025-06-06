@@ -7,7 +7,7 @@
 # Example: git-identity clone git@github.com:username/repo.git
 #          git-identity push origin main
 #
-# Author: AI Assistant
+# Author: Hugo Alonso Luis
 
 set -e
 
@@ -113,34 +113,89 @@ function select_identity() {
 # Function to debug SSH setup
 function debug_ssh() {
   echo "=== SSH Debug Information ==="
-  echo "SSH config file (~/.ssh/config):"
-  if [[ -f ~/.ssh/config ]]; then
-    echo "--- ~/.ssh/config exists ---"
-    grep -A 10 -B 2 "github" ~/.ssh/config || echo "No github entries found"
+  echo
+  
+  # Check SSH directory
+  echo "SSH directory (~/.ssh/):"
+  if [[ -d ~/.ssh ]]; then
+    echo "✓ ~/.ssh directory exists"
+    echo "Permissions: $(ls -ld ~/.ssh | awk '{print $1}')"
   else
-    echo "~/.ssh/config does not exist"
+    echo "✗ ~/.ssh directory does not exist"
+    return 1
   fi
   
-  echo ""
-  echo "SSH keys in ~/.ssh/:"
-  ls -la ~/.ssh/id_* 2>/dev/null || echo "No SSH keys found"
+  echo
+  echo "SSH config file (~/.ssh/config):"
+  if [[ -f ~/.ssh/config ]]; then
+    echo "✓ ~/.ssh/config exists"
+    echo "Permissions: $(ls -l ~/.ssh/config | awk '{print $1}')"
+    echo
+    echo "--- ~/.ssh/config contents (github-related) ---"
+    if grep -i "github" ~/.ssh/config >/dev/null 2>&1; then
+      grep -A 5 -B 1 -i "host.*github" ~/.ssh/config
+    else
+      echo "No github entries found in config"
+    fi
+  else
+    echo "✗ ~/.ssh/config does not exist"
+  fi
   
-  echo ""
-  echo "SSH agent keys:"
-  ssh-add -l 2>/dev/null || echo "No keys in SSH agent or SSH agent not running"
+  echo
+  echo "SSH keys in ~/.ssh/:"
+  if ls ~/.ssh/id_* >/dev/null 2>&1; then
+    ls -la ~/.ssh/id_* | while read line; do
+      if [[ "$line" == *".pub" ]]; then
+        echo "  Public:  $line"
+      else
+        echo "  Private: $line"
+      fi
+    done
+  else
+    echo "No SSH keys found (id_* pattern)"
+  fi
+  
+  echo
+  echo "SSH agent status:"
+  if ssh-add -l >/dev/null 2>&1; then
+    echo "✓ SSH agent is running with keys:"
+    ssh-add -l | sed 's/^/  /'
+  else
+    case $? in
+      1) echo "✗ SSH agent is running but has no keys loaded" ;;
+      2) echo "✗ SSH agent is not running" ;;
+      *) echo "✗ Unknown SSH agent status" ;;
+    esac
+  fi
+  
+  echo
+  echo "Testing SSH connections:"
+  echo -n "  github.com: "
+  if timeout 10 ssh -T -o ConnectTimeout=5 -o BatchMode=yes git@github.com 2>&1 | grep -q "successfully authenticated"; then
+    echo "✓ Connected"
+  else
+    echo "✗ Failed"
+  fi
+  
+  echo -n "  github-personal: "
+  if timeout 10 ssh -T -o ConnectTimeout=5 -o BatchMode=yes git@github-personal 2>&1 | grep -q "successfully authenticated"; then
+    echo "✓ Connected"
+  else
+    echo "✗ Failed (check if github-personal is configured in ~/.ssh/config)"
+  fi
 }
 
-# Show help if requested
-if [[ "$1" == "-h" || "$1" == "--help" ]]; then
-  show_usage
-  exit 0
-fi
-
-# Show debug info if requested
-if [[ "$1" == "--debug" ]]; then
-  debug_ssh
-  exit 0
-fi
+# Handle special arguments first
+case "$1" in
+  "-h"|"--help")
+    show_usage
+    exit 0
+    ;;
+  "--debug")
+    debug_ssh
+    exit 0
+    ;;
+esac
 
 # Check if git is installed
 if ! command -v git &> /dev/null; then
